@@ -1,0 +1,6 @@
+obj/
+*.exe
+kirby_game
+extract_sprites
+analyze_sprites
+*.o

@@ -1,0 +1,81 @@
+# Instrucciones para compilar y ejecutar Kirby Game en Ubuntu
+
+## Requisitos previos
+
+### 1. Instalar dependencias del sistema
+```bash
+sudo apt update
+sudo apt install g++ make
+```
+
+### 2. Instalar SFML
+```bash
+sudo apt install libsfml-dev
+```
+
+## Compilar el proyecto
+
+### Compilar el juego principal:
+```bash
+make
+```
+
+### Compilar extract_sprites (si es necesario):
+```bash
+g++ -std=c++17 -o extract_sprites extract_sprites.cpp -lsfml-graphics -lsfml-window -lsfml-system
+```
+
+### Compilar analyze_sprites (si es necesario):
+```bash
+g++ -std=c++17 -o analyze_sprites analyze_sprites.cpp -lsfml-graphics -lsfml-window -lsfml-system
+```
+
+## Ejecutar el juego
+
+### Juego principal:
+```bash
+./kirby_game
+```
+
+### Extraer sprites:
+```bash
+./extract_sprites
+```
+
+## Limpiar archivos compilados
+```bash
+make clean
+```
+
+## Librerías utilizadas
+- **SFML** (Simple and Fast Multimedia Library)
+  - sfml-graphics
+  - sfml-window
+  - sfml-system
+  - sfml-audio
+
+## Subir a Git
+
+### Crear repositorio y subir:
+```bash
+git init
+git add .
+git commit -m "Initial commit: Kirby game project"
+git remote add origin <URL_DEL_REPOSITORIO>
+git push -u origin main
+```
+
+### .gitignore recomendado:
+```
+obj/
+kirby_game
+extract_sprites
+analyze_sprites
+*.o
+```
+
+## Notas
+- El proyecto usa C++17
+- Requiere SFML instalado (`libsfml-dev`)
+- Los archivos de sprites, sonidos y fuentes deben estar en sus respectivas carpetas
+- Ejecutar desde la carpeta raíz del proyecto para que encuentre los recursos
