@@ -23,11 +23,18 @@ private:
     void loadLevel(int level);
     void cleanEntities();
 
+    void loadSettings();
+    void saveSettings();
+    void applyVolume();
+    void adjustVolume(int delta);
+    void updateMusic();
+
     static void* kirbyLogic(void* arg);
     static void* enemyLogic(void* arg);
 
     bool running;
     sf::RenderWindow window;
+    float masterVolume;
     SharedState sharedState;
     
     pthread_t kirbyThread;

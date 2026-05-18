@@ -38,6 +38,7 @@ private:
     float x,y,vx,vy; int direction; KirbyState state; Ability ability;
     Ability pendingAbility;
     int lives,health,floatsLeft; float absorbTimer,hurtTimer; bool onGround;
+    void resetAnimation();
     sf::Texture texIdle[2], texWalkLeft[2], texWalkRight[2], texJump, texFall;
     sf::Texture texFloat[4], texAbsorb, texHurt;
     sf::Texture texPuffed[5], texSpit[3];

@@ -50,17 +50,43 @@ Kirby::Kirby(float sx, float sy)
 }
 Kirby::~Kirby() {}
 
+void Kirby::resetAnimation() {
+    animFrame = 0;
+    animTimer = 0;
+    if (!textureLoaded) return;
+    switch (state) {
+        case KirbyState::IDLE: sprite.setTexture(texIdle[0]); break;
+        case KirbyState::WALKING: sprite.setTexture(direction == -1 ? texWalkLeft[0] : texWalkRight[0]); break;
+        case KirbyState::JUMPING: sprite.setTexture(texJump); break;
+        case KirbyState::FLOATING: sprite.setTexture(texFloat[0]); break;
+        case KirbyState::ABSORBING: sprite.setTexture(texAbsorb); break;
+        case KirbyState::HAS_ENEMY: sprite.setTexture(texPuffed[0]); break;
+        case KirbyState::SPITTING: sprite.setTexture(texSpit[0]); break;
+        case KirbyState::USING_ABILITY: sprite.setTexture(texAbsorb); break;
+        case KirbyState::HURT: sprite.setTexture(texHurt); break;
+        default: sprite.setTexture(texIdle[0]); break;
+    }
+}
+
 void Kirby::update(SharedState* ss) {
     if (state == KirbyState::DEAD) return;
-    if (hurtTimer > 0) { hurtTimer -= 0.016f; if (hurtTimer<=0 && state==KirbyState::HURT) state=KirbyState::IDLE; }
+    if (hurtTimer > 0) {
+        hurtTimer -= 0.016f;
+        if (hurtTimer <= 0 && state == KirbyState::HURT) {
+            state = KirbyState::IDLE;
+            resetAnimation();
+        }
+    }
     
     if (attackCooldown > 0) {
         attackCooldown -= 0.016f;
         if (attackCooldown <= 0 && state == KirbyState::SPITTING) {
             state = KirbyState::IDLE;
+            resetAnimation();
         }
         if (attackCooldown <= 0 && state == KirbyState::USING_ABILITY) {
             state = KirbyState::IDLE;
+            resetAnimation();
         }
     }
 
@@ -76,9 +102,12 @@ void Kirby::update(SharedState* ss) {
         for (size_t i=0; i<ss->enemies.size(); i++) {
             Enemy* e = ss->enemies[i];
             if (e && !e->isDead() && area.intersects(e->getBounds())) {
-                pendingAbility = e->getDropAbility();
+                Ability absorbed = e->getDropAbility();
+                pendingAbility = Ability::NONE;
+                ability = absorbed;
                 e->die(); ss->score += 100; ss->stopSoundAbsorb = true;
                 state = KirbyState::HAS_ENEMY;
+                resetAnimation();
                 break;
             }
         }
@@ -86,10 +115,12 @@ void Kirby::update(SharedState* ss) {
         for (size_t i=0; i<ss->projectiles.size(); i++) {
             Projectile* p = ss->projectiles[i];
             if (p && !p->isInactive() && !p->isFromKirby() && p->getAbility() == Ability::BOMB && area.intersects(p->getBounds())) {
-                pendingAbility = Ability::BOMB_RETURN;
+                ability = Ability::BOMB_RETURN;
+                pendingAbility = Ability::NONE;
                 p->deactivate();
                 ss->stopSoundAbsorb = true;
                 state = KirbyState::HAS_ENEMY;
+                resetAnimation();
                 break;
             }
         }
@@ -221,6 +252,7 @@ void Kirby::render(sf::RenderWindow& win, float camX) {
         else if (ability == Ability::SWORD) sprite.setColor(sf::Color(150, 255, 150));
         else if (ability == Ability::SPARK) sprite.setColor(sf::Color(255, 255, 150));
         else if (ability == Ability::BEAM) sprite.setColor(sf::Color(150, 150, 255));
+        else if (ability == Ability::BOMB_RETURN) sprite.setColor(sf::Color(230, 180, 120));
         else sprite.setColor(sf::Color(255, 255, 255));
 
         sprite.setPosition(drawX, drawY);
@@ -232,6 +264,54 @@ void Kirby::render(sf::RenderWindow& win, float camX) {
             sprite.setScale(scale, scale); sprite.setOrigin(0,0); 
         }
         win.draw(sprite);
+
+        if (state == KirbyState::HAS_ENEMY && ability != Ability::NONE) {
+            sf::Color iconColor = sf::Color::White;
+            if (ability == Ability::FIRE) iconColor = sf::Color(255, 120, 0);
+            else if (ability == Ability::SWORD) iconColor = sf::Color(100, 255, 100);
+            else if (ability == Ability::SPARK) iconColor = sf::Color(255, 255, 120);
+            else if (ability == Ability::BEAM) iconColor = sf::Color(120, 200, 255);
+            else if (ability == Ability::BOMB_RETURN) iconColor = sf::Color(200, 150, 100);
+
+            sf::CircleShape icon(12);
+            icon.setFillColor(iconColor);
+            icon.setOutlineColor(sf::Color::White);
+            icon.setOutlineThickness(2);
+            icon.setPosition(drawX + 22, drawY - 18);
+            win.draw(icon);
+
+            if (ability == Ability::SWORD) {
+                sf::RectangleShape blade(sf::Vector2f(2, 18));
+                blade.setFillColor(sf::Color::White);
+                blade.setPosition(drawX + 28, drawY - 12);
+                blade.setRotation(-45);
+                win.draw(blade);
+            } else if (ability == Ability::FIRE) {
+                sf::CircleShape flame(6);
+                flame.setFillColor(sf::Color::Yellow);
+                flame.setPosition(drawX + 26, drawY - 14);
+                win.draw(flame);
+            } else if (ability == Ability::SPARK) {
+                sf::ConvexShape spark;
+                spark.setPointCount(4);
+                spark.setPoint(0, sf::Vector2f(drawX + 30, drawY - 16));
+                spark.setPoint(1, sf::Vector2f(drawX + 26, drawY - 8));
+                spark.setPoint(2, sf::Vector2f(drawX + 34, drawY - 4));
+                spark.setPoint(3, sf::Vector2f(drawX + 32, drawY - 14));
+                spark.setFillColor(sf::Color::White);
+                win.draw(spark);
+            } else if (ability == Ability::BEAM) {
+                sf::RectangleShape beam(sf::Vector2f(14, 4));
+                beam.setFillColor(sf::Color::White);
+                beam.setPosition(drawX + 24, drawY - 12);
+                win.draw(beam);
+            } else if (ability == Ability::BOMB_RETURN) {
+                sf::CircleShape dot(4);
+                dot.setFillColor(sf::Color::Black);
+                dot.setPosition(drawX + 28, drawY - 10);
+                win.draw(dot);
+            }
+        }
     } else {
         sf::CircleShape c(24); c.setPosition(drawX,y);
         c.setFillColor(sf::Color(255,182,193)); c.setOutlineColor(sf::Color(220,120,150));
@@ -247,16 +327,16 @@ void Kirby::render(sf::RenderWindow& win, float camX) {
     }
 }
 
-void Kirby::moveLeft()  { vx=-GameConfig::MOVE_SPEED; direction=-1; if(state==KirbyState::IDLE)state=KirbyState::WALKING; }
-void Kirby::moveRight() { vx=GameConfig::MOVE_SPEED;  direction=1;  if(state==KirbyState::IDLE)state=KirbyState::WALKING; }
-void Kirby::stopMoving(){ vx=0; if(state==KirbyState::WALKING) state=KirbyState::IDLE; }
+void Kirby::moveLeft()  { vx=-GameConfig::MOVE_SPEED; direction=-1; if(state==KirbyState::IDLE){state=KirbyState::WALKING; resetAnimation();} }
+void Kirby::moveRight() { vx=GameConfig::MOVE_SPEED;  direction=1;  if(state==KirbyState::IDLE){state=KirbyState::WALKING; resetAnimation();} }
+void Kirby::stopMoving(){ vx=0; if(state==KirbyState::WALKING){ state=KirbyState::IDLE; resetAnimation();} }
 void Kirby::jump(SharedState* ss) {
-    if(onGround){vy=GameConfig::JUMP_SPEED;state=KirbyState::JUMPING;onGround=false;ss->playSoundJump=true;}
+    if(onGround){vy=GameConfig::JUMP_SPEED;state=KirbyState::JUMPING;onGround=false;ss->playSoundJump=true; resetAnimation();}
     else floatUp(ss);
 }
-void Kirby::floatUp(SharedState* ss) { if(floatsLeft>0){state=KirbyState::FLOATING;vy=GameConfig::FLOAT_LIFT;floatsLeft--;ss->playSoundJump=true;} }
-void Kirby::startAbsorb(SharedState* ss) { if(ability==Ability::NONE&&state!=KirbyState::HAS_ENEMY&&state!=KirbyState::ABSORBING){state=KirbyState::ABSORBING;ss->playSoundAbsorb=true;} }
-void Kirby::stopAbsorb(SharedState* ss) { if(state==KirbyState::ABSORBING){state=KirbyState::IDLE;ss->stopSoundAbsorb=true;} }
+void Kirby::floatUp(SharedState* ss) { if(floatsLeft>0){state=KirbyState::FLOATING;vy=GameConfig::FLOAT_LIFT;floatsLeft--;ss->playSoundJump=true; resetAnimation();} }
+void Kirby::startAbsorb(SharedState* ss) { if(ability==Ability::NONE&&state!=KirbyState::HAS_ENEMY&&state!=KirbyState::ABSORBING){state=KirbyState::ABSORBING;ss->playSoundAbsorb=true; resetAnimation();} }
+void Kirby::stopAbsorb(SharedState* ss) { if(state==KirbyState::ABSORBING){state=KirbyState::IDLE;ss->stopSoundAbsorb=true; resetAnimation();} }
 
 void Kirby::swallow(SharedState* /*ss*/) {
     if (state != KirbyState::HAS_ENEMY) return;
@@ -265,21 +345,34 @@ void Kirby::swallow(SharedState* /*ss*/) {
     }
     pendingAbility = Ability::NONE;
     state = KirbyState::IDLE;
+    resetAnimation();
 }
 
 void Kirby::spitOrUseAbility(SharedState* ss) {
     if (attackCooldown > 0) return;
-    if(state==KirbyState::HAS_ENEMY){
-        // Spit star
-        state=KirbyState::SPITTING;
-        ss->playSoundHit=true;
+    if (state == KirbyState::HAS_ENEMY && ability != Ability::NONE) {
+        state = KirbyState::USING_ABILITY;
+        resetAnimation();
+        ss->playSoundHit = true;
+        attackCooldown = 0.4f;
+        if (ability == Ability::BOMB_RETURN) {
+            ss->projectiles.push_back(new Projectile(x, y+20, direction, true, Ability::BOMB_RETURN));
+            ability = Ability::NONE;
+        } else {
+            ss->projectiles.push_back(new Projectile(x, y+20, direction, true, ability));
+        }
+    } else if (state == KirbyState::HAS_ENEMY) {
+        // Spit star without consuming an ability
+        state = KirbyState::SPITTING;
+        resetAnimation();
+        ss->playSoundHit = true;
         attackCooldown = 0.4f;
         pendingAbility = Ability::NONE;
         ss->projectiles.push_back(new Projectile(x, y+20, direction, true, Ability::NONE));
-    }
-    else if(ability!=Ability::NONE){
-        state=KirbyState::USING_ABILITY;
-        ss->playSoundHit=true;
+    } else if (ability != Ability::NONE) {
+        state = KirbyState::USING_ABILITY;
+        resetAnimation();
+        ss->playSoundHit = true;
         attackCooldown = 0.4f;
         if (ability == Ability::BOMB_RETURN) {
             ss->projectiles.push_back(new Projectile(x, y+20, direction, true, Ability::BOMB_RETURN));
@@ -293,11 +386,12 @@ void Kirby::takeDamage(SharedState* ss) {
     if(hurtTimer>0) return; 
     if(state==KirbyState::ABSORBING) ss->stopSoundAbsorb=true;
     health--; hurtTimer=1.5f; state=KirbyState::HURT; ability=Ability::NONE; pendingAbility=Ability::NONE;
+    resetAnimation();
     vy=-5;vx=-direction*3;ss->playSoundDamage=true;
     if(health<=0){lives--;if(lives<=0){state=KirbyState::DEAD;ss->playSoundDeath=true;}
     else{health=GameConfig::MAX_HEALTH;floatsLeft=GameConfig::MAX_FLOATS;x=100;y=300;}}
 }
-void Kirby::resetState() { if(state==KirbyState::ABSORBING||state==KirbyState::USING_ABILITY)state=KirbyState::IDLE; }
+void Kirby::resetState() { if(state==KirbyState::ABSORBING||state==KirbyState::USING_ABILITY){ state=KirbyState::IDLE; resetAnimation(); } }
 sf::FloatRect Kirby::getBounds() const {
     return sf::FloatRect(x, y, 48, 48);
 }
@@ -325,7 +419,7 @@ void Kirby::checkPlatformCollisions(SharedState* ss) {
             case 1:x=pr.left+pr.width;vx=0;break;
             case 2:y=pr.top-kr.height;vy=0;onGround=true;
                 floatsLeft=GameConfig::MAX_FLOATS;
-                if(state==KirbyState::JUMPING||state==KirbyState::FLOATING){state=KirbyState::IDLE;}break;
+                if(state==KirbyState::JUMPING||state==KirbyState::FLOATING){state=KirbyState::IDLE; resetAnimation();}break;
             case 3:y=pr.top+pr.height;vy=0;break;
         }
         kr=getBounds();

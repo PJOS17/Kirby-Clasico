@@ -3,14 +3,17 @@
 #include "Enemy.hpp"
 #include "Projectile.hpp"
 #include <iostream>
+#include <fstream>
+#include <algorithm>
 
-Game::Game() : running(true), lastMusicLevel(-1) {
+Game::Game() : running(true), lastMusicLevel(-1), masterVolume(50.0f) {
     window.create(sf::VideoMode(GameConfig::WINDOW_WIDTH, GameConfig::WINDOW_HEIGHT), "Kirby Clásico - Motor Pthreads");
     window.setFramerateLimit(60);
     sharedState.setMode(GameMode::MENU);
     pthread_mutex_init(&sharedState.gameMutex, nullptr);
 
     if (!font.loadFromFile("arial.ttf")) std::cerr<<"[WARN] No se pudo cargar arial.ttf\n";
+    loadSettings();
     if (bgTex.loadFromFile(GameConfig::BG_PATH)) { bgSprite.setTexture(bgTex); bgSprite.setScale(3.75f, 3.75f); }
     if (bgInstructionsTex.loadFromFile(GameConfig::BG_INSTRUCTIONS)) { bgInstructionsSprite.setTexture(bgInstructionsTex); bgInstructionsSprite.setScale(3.75f, 3.75f); }
     if (groundTex.loadFromFile("Sprys Nuevos/Strages/sprite_001.png")) { groundSprite.setTexture(groundTex); groundSprite.setTextureRect(sf::IntRect(0, 87, 16, 16)); groundSprite.setScale(2.0f, 2.0f); }
@@ -30,11 +33,11 @@ Game::Game() : running(true), lastMusicLevel(-1) {
     if(sbufBossBattle.loadFromFile(GameConfig::SND_BOSS_BATTLE)) {
         sndBossBattle.setBuffer(sbufBossBattle);
         sndBossBattle.setLoop(true);
-        sndBossBattle.setVolume(50);
     }
 
-    if(musMenu.openFromFile(GameConfig::SND_MENU)){ musMenu.setLoop(true); musMenu.setVolume(50); musMenu.play(); }
-    if(musLevel.openFromFile(GameConfig::SND_LEVEL)){ musLevel.setLoop(true); musLevel.setVolume(50); }
+    if(musMenu.openFromFile(GameConfig::SND_MENU)){ musMenu.setLoop(true); musMenu.play(); }
+    if(musLevel.openFromFile(GameConfig::SND_LEVEL)){ musLevel.setLoop(true); }
+    applyVolume();
 }
 
 Game::~Game() {
@@ -54,10 +57,59 @@ void Game::cleanEntities() {
     sharedState.platforms.clear();
 }
 
+void Game::loadSettings() {
+    std::ifstream file("settings.cfg");
+    if (file.is_open()) {
+        float savedVolume;
+        if (file >> savedVolume) {
+            masterVolume = std::clamp(savedVolume, 0.0f, 100.0f);
+        }
+    }
+}
+
+void Game::saveSettings() {
+    std::ofstream file("settings.cfg");
+    if (file.is_open()) {
+        file << masterVolume;
+    }
+}
+
+void Game::applyVolume() {
+    sndJump.setVolume(masterVolume);
+    sndAbsorb.setVolume(masterVolume);
+    sndHit.setVolume(masterVolume);
+    sndDamage.setVolume(masterVolume);
+    sndEnemyDie.setVolume(masterVolume);
+    sndDeath.setVolume(masterVolume);
+    sndDoor.setVolume(masterVolume);
+    sndBossBattle.setVolume(masterVolume);
+    musMenu.setVolume(masterVolume);
+    musLevel.setVolume(masterVolume);
+}
+
+void Game::adjustVolume(int delta) {
+    masterVolume = std::clamp(masterVolume + delta, 0.0f, 100.0f);
+    applyVolume();
+    saveSettings();
+}
+
+void Game::updateMusic() {
+    GameMode mode = sharedState.getMode();
+    if (mode == GameMode::MENU || mode == GameMode::INSTRUCTIONS || mode == GameMode::GAME_OVER || mode == GameMode::VICTORY) {
+        if (musMenu.getStatus() != sf::SoundSource::Playing) {
+            musLevel.stop();
+            sndBossBattle.stop();
+            musMenu.setLoop(true);
+            musMenu.play();
+        }
+    }
+}
+
 void Game::run() {
     while (window.isOpen()) {
         processEvents();
         update();
+        updateMusic();
         pthread_mutex_lock(&sharedState.gameMutex);
         if(sharedState.playSoundJump){sndJump.play();sharedState.playSoundJump=false;}
         if(sharedState.playSoundAbsorb){sndAbsorb.setLoop(true);sndAbsorb.play();sharedState.playSoundAbsorb=false;}
@@ -82,12 +134,16 @@ void Game::processEvents() {
                 if (e.key.code == sf::Keyboard::Num1) startGame(GameMode::MODE_1_PLAYER);
                 if (e.key.code == sf::Keyboard::Num2) startGame(GameMode::MODE_2_CPU);
                 if (e.key.code == sf::Keyboard::I) sharedState.setMode(GameMode::INSTRUCTIONS);
+                if (e.key.code == sf::Keyboard::O) adjustVolume(-5);
+                if (e.key.code == sf::Keyboard::P) adjustVolume(5);
                 if (e.key.code == sf::Keyboard::Escape) window.close();
             } else if (mode == GameMode::INSTRUCTIONS) {
                 if (e.key.code == sf::Keyboard::Escape) sharedState.setMode(GameMode::MENU);
             } else if (mode == GameMode::PAUSED) {
                 if (e.key.code == sf::Keyboard::Escape) sharedState.setMode(GameMode::MODE_1_PLAYER);
                 if (e.key.code == sf::Keyboard::M) { resetGame(); sharedState.setMode(GameMode::MENU); }
+                if (e.key.code == sf::Keyboard::O) adjustVolume(-5);
+                if (e.key.code == sf::Keyboard::P) adjustVolume(5);
             } else if (mode == GameMode::GAME_OVER || mode == GameMode::VICTORY) {
                 if (e.key.code == sf::Keyboard::Escape) resetGame();
             } else if ((mode == GameMode::MODE_1_PLAYER || mode == GameMode::MODE_2_CPU) && sharedState.kirby) {
@@ -191,7 +247,7 @@ void Game::loadLevel(int level) {
 
     // Music management
     if (level == 3) {
-        if (lastMusicLevel != 3) {
+        if (lastMusicLevel != 3 || sndBossBattle.getStatus() != sf::SoundSource::Playing) {
             musLevel.stop();
             sndBossBattle.setPlayingOffset(sf::seconds(0));
             sndBossBattle.play();
@@ -363,6 +419,29 @@ void Game::render() {
             t.setCharacterSize(24); t.setFillColor(sf::Color::White);
             t.setString("1 - Modo 1 Jugador\n\n2 - Modo CPU vs Enemigos\n\nI - Instrucciones\n\nESC - Salir");
             t.setPosition(250, 350); window.draw(t);
+
+            float sliderWidth = 260.0f;
+            float sliderHeight = 18.0f;
+            float sliderX = (GameConfig::WINDOW_WIDTH - sliderWidth) / 2.0f;
+            float sliderY = 280.0f;
+            sf::RectangleShape sliderBg(sf::Vector2f(sliderWidth, sliderHeight));
+            sliderBg.setFillColor(sf::Color(80, 80, 80, 220));
+            sliderBg.setPosition(sliderX, sliderY);
+            window.draw(sliderBg);
+
+            sf::RectangleShape sliderFill(sf::Vector2f(sliderWidth * (masterVolume / 100.0f), sliderHeight));
+            sliderFill.setFillColor(sf::Color(255, 182, 193));
+            sliderFill.setPosition(sliderX, sliderY);
+            window.draw(sliderFill);
+
+            t.setCharacterSize(18);
+            t.setFillColor(sf::Color::White);
+            t.setString("Volumen: " + std::to_string((int)masterVolume) + "%   O / P");
+            t.setPosition(sliderX, sliderY - 28.0f);
+            window.draw(t);
+            t.setString("Volumen guardado automaticamente.");
+            t.setPosition(sliderX, sliderY + 24.0f);
+            window.draw(t);
         } else {
             t.setString("INSTRUCCIONES"); t.setCharacterSize(40); t.setPosition(250, 50); window.draw(t);
             t.setCharacterSize(20);
@@ -402,7 +481,7 @@ void Game::render() {
         t.setString("PAUSA"); t.setFillColor(sf::Color::White);
         t.setPosition(300, 150); window.draw(t);
         t.setCharacterSize(24);
-        t.setString("ESC - Continuar\nM - Volver al menu principal");
+        t.setString("ESC - Continuar\nM - Volver al menu principal\nO / P - Ajustar volumen");
         t.setPosition(220, 250); window.draw(t);
     } else {
         // Parallax background

@@ -108,11 +108,17 @@ void Enemy::update(SharedState* ss) {
             dancerState = 1;
             vy = -20.0f;
             stateTimer = 0;
+            animFrame = 0;
+            animTimer = 0;
+            sprite.setTexture(frameTex[5]);
         }
         // Aterrizar
         if (dancerState == 1 && onGround && vy == 0) {
             dancerState = 0;
             stateTimer = 0;
+            animFrame = 0;
+            animTimer = 0;
+            sprite.setTexture(frameTex[0]);
         }
 
         // IA del boss
@@ -128,6 +134,8 @@ void Enemy::update(SharedState* ss) {
                 bombCooldown = 0;
                 stateTimer = 0;
                 animFrame = 0;
+                animTimer = 0;
+                sprite.setTexture(frameTex[7]);
             }
         } else if (dancerState == 1) {
             animTimer += 0.016f;
@@ -145,6 +153,8 @@ void Enemy::update(SharedState* ss) {
                     ss->projectiles.push_back(new Projectile(x, y - 30, bombDir, false, Ability::BOMB));
                     dancerState = 0;
                     animFrame = 0;
+                    animTimer = 0;
+                    sprite.setTexture(frameTex[0]);
                 } else {
                     sprite.setTexture(frameTex[7 + animFrame]);
                 }
