@@ -53,19 +53,8 @@ Kirby::~Kirby() {}
 void Kirby::resetAnimation() {
     animFrame = 0;
     animTimer = 0;
-    if (!textureLoaded) return;
-    switch (state) {
-        case KirbyState::IDLE: sprite.setTexture(texIdle[0]); break;
-        case KirbyState::WALKING: sprite.setTexture(direction == -1 ? texWalkLeft[0] : texWalkRight[0]); break;
-        case KirbyState::JUMPING: sprite.setTexture(texJump); break;
-        case KirbyState::FLOATING: sprite.setTexture(texFloat[0]); break;
-        case KirbyState::ABSORBING: sprite.setTexture(texAbsorb); break;
-        case KirbyState::HAS_ENEMY: sprite.setTexture(texPuffed[0]); break;
-        case KirbyState::SPITTING: sprite.setTexture(texSpit[0]); break;
-        case KirbyState::USING_ABILITY: sprite.setTexture(texAbsorb); break;
-        case KirbyState::HURT: sprite.setTexture(texHurt); break;
-        default: sprite.setTexture(texIdle[0]); break;
-    }
+    // Do not touch SFML textures here — rendering must run on the main thread.
+    // `render()` will pick the correct texture based on `state` and `animFrame`.
 }
 
 void Kirby::update(SharedState* ss) {
@@ -171,29 +160,21 @@ void Kirby::update(SharedState* ss) {
     ss->cameraX = x - GameConfig::WINDOW_WIDTH / 3.0f;
     if (ss->cameraX < 0) ss->cameraX = 0;
 
-    // Animación
+    // Advance animation timers and frame index. Texture selection is done
+    // in `render()` (main thread) to avoid calling SFML from worker threads.
     animTimer += 0.016f;
     if (animTimer > 0.10f) {
         animTimer = 0; animFrame++;
-        if (textureLoaded) {
-            switch (state) {
-                case KirbyState::IDLE: sprite.setTexture(texIdle[animFrame%2]); break;
-                case KirbyState::WALKING: sprite.setTexture(direction == -1 ? texWalkLeft[animFrame%2] : texWalkRight[animFrame%2]); break;
-                case KirbyState::JUMPING: sprite.setTexture(vy<0?texJump:texFall); break;
-                case KirbyState::FLOATING: sprite.setTexture(texFloat[animFrame%4]); break;
-                case KirbyState::ABSORBING: sprite.setTexture(texAbsorb); break;
-                case KirbyState::HAS_ENEMY: sprite.setTexture(texPuffed[animFrame%5]); break;
-                case KirbyState::SPITTING: sprite.setTexture(texSpit[animFrame%3]); break;
-                case KirbyState::USING_ABILITY: sprite.setTexture(texAbsorb); break;
-                case KirbyState::HURT: sprite.setTexture(texHurt); break;
-                default: sprite.setTexture(texIdle[0]); break;
-            }
-        }
     }
 }
 
 void Kirby::updateCPU(SharedState* ss) {
-    if (state == KirbyState::HURT || state == KirbyState::DEAD) return;
+    if (state == KirbyState::DEAD) return;
+    if (state == KirbyState::HURT) {
+        // Allow hurt recovery to progress in CPU mode.
+        update(ss);
+        return;
+    }
 
     bool safeAhead = false;
     bool spikeAhead = false;
@@ -227,6 +208,16 @@ void Kirby::updateCPU(SharedState* ss) {
     vx = direction * GameConfig::MOVE_SPEED;
     if (state == KirbyState::IDLE) state = KirbyState::WALKING;
 
+    // If an enemy is in absorb range, attempt to absorb (improves CPU behavior)
+    sf::FloatRect cpuArea = getAbsorbBounds();
+    for (size_t ei = 0; ei < ss->enemies.size(); ++ei) {
+        Enemy* e = ss->enemies[ei];
+        if (e && !e->isDead() && cpuArea.intersects(e->getBounds())) {
+            startAbsorb(ss);
+            break;
+        }
+    }
+
     if (rand() % 60 == 0) {
         if (state == KirbyState::HAS_ENEMY) {
             if (rand() % 2 == 0) swallow(ss);
@@ -244,6 +235,19 @@ void Kirby::render(sf::RenderWindow& win, float camX) {
     if (hurtTimer>0 && ((int)(hurtTimer*10)%2==0)) return;
     float drawX = x - camX;
     if (textureLoaded) {
+        // Select texture according to current state and animation frame.
+        switch (state) {
+            case KirbyState::IDLE: sprite.setTexture(texIdle[animFrame%2]); break;
+            case KirbyState::WALKING: sprite.setTexture(direction == -1 ? texWalkLeft[animFrame%2] : texWalkRight[animFrame%2]); break;
+            case KirbyState::JUMPING: sprite.setTexture(vy<0?texJump:texFall); break;
+            case KirbyState::FLOATING: sprite.setTexture(texFloat[animFrame%4]); break;
+            case KirbyState::ABSORBING: sprite.setTexture(texAbsorb); break;
+            case KirbyState::HAS_ENEMY: sprite.setTexture(texPuffed[animFrame%5]); break;
+            case KirbyState::SPITTING: sprite.setTexture(texSpit[animFrame%3]); break;
+            case KirbyState::USING_ABILITY: sprite.setTexture(texAbsorb); break;
+            case KirbyState::HURT: sprite.setTexture(texHurt); break;
+            default: sprite.setTexture(texIdle[0]); break;
+        }
         float scale = 3.0f;
         float texH = sprite.getTexture()->getSize().y * scale;
         float drawY = y + 48 - texH;

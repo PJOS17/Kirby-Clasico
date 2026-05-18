@@ -5,6 +5,7 @@
 #include <SFML/Audio.hpp>
 #include <pthread.h>
 #include "SharedState.hpp"
+#include "AudioManager.hpp"
 
 class Game {
 public:
@@ -36,6 +37,11 @@ private:
     sf::RenderWindow window;
     float masterVolume;
     SharedState sharedState;
+    // Slider drag state for UI interaction (menu / pause)
+    bool draggingMainSlider = false;
+    bool draggingPauseSlider = false;
+    // Master mute flag (persisted to settings.cfg)
+    bool isMuted = false;
     
     pthread_t kirbyThread;
     pthread_t enemyThread;
@@ -46,10 +52,9 @@ private:
     sf::Sprite bgSprite, bgInstructionsSprite, groundSprite, platformSprite, doorLeftSprite, doorRightSprite, doorStarSprite;
     sf::Sprite levelBgSprite;
 
-    sf::SoundBuffer sbufJump, sbufAbsorb, sbufHit, sbufDamage, sbufEnemyDie, sbufDeath, sbufDoor, sbufBossBattle;
-    sf::Sound sndJump, sndAbsorb, sndHit, sndDamage, sndEnemyDie, sndDeath, sndDoor, sndBossBattle;
-    sf::Music musMenu, musLevel;
+    AudioManager audioManager;
     int lastMusicLevel;
+    GameMode pausedModeBeforePause;
 };
 
 #endif

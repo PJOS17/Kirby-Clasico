@@ -6,7 +6,7 @@
 #include <fstream>
 #include <algorithm>
 
-Game::Game() : running(true), lastMusicLevel(-1), masterVolume(50.0f) {
+Game::Game() : running(true), lastMusicLevel(-1), masterVolume(50.0f), pausedModeBeforePause(GameMode::MENU) {
     window.create(sf::VideoMode(GameConfig::WINDOW_WIDTH, GameConfig::WINDOW_HEIGHT), "Kirby Clásico - Motor Pthreads");
     window.setFramerateLimit(60);
     sharedState.setMode(GameMode::MENU);
@@ -22,21 +22,7 @@ Game::Game() : running(true), lastMusicLevel(-1), masterVolume(50.0f) {
     if (doorRightTex.loadFromFile(GameConfig::DOOR_RIGHT)) { doorRightSprite.setTexture(doorRightTex); doorRightSprite.setScale(2.0f, 2.0f); }
     if (doorStarTex.loadFromFile(GameConfig::DOOR_STAR)) { doorStarSprite.setTexture(doorStarTex); doorStarSprite.setScale(2.0f, 2.0f); }
 
-    // Init sounds
-    if(sbufJump.loadFromFile(GameConfig::SND_JUMP)) sndJump.setBuffer(sbufJump);
-    if(sbufAbsorb.loadFromFile(GameConfig::SND_ABSORB)) sndAbsorb.setBuffer(sbufAbsorb);
-    if(sbufHit.loadFromFile(GameConfig::SND_HIT)) sndHit.setBuffer(sbufHit);
-    if(sbufDamage.loadFromFile(GameConfig::SND_DAMAGE)) sndDamage.setBuffer(sbufDamage);
-    if(sbufEnemyDie.loadFromFile(GameConfig::SND_ENEMY_DIE)) sndEnemyDie.setBuffer(sbufEnemyDie);
-    if(sbufDeath.loadFromFile(GameConfig::SND_DEATH)) sndDeath.setBuffer(sbufDeath);
-    if(sbufDoor.loadFromFile(GameConfig::SND_DOOR)) sndDoor.setBuffer(sbufDoor);
-    if(sbufBossBattle.loadFromFile(GameConfig::SND_BOSS_BATTLE)) {
-        sndBossBattle.setBuffer(sbufBossBattle);
-        sndBossBattle.setLoop(true);
-    }
-
-    if(musMenu.openFromFile(GameConfig::SND_MENU)){ musMenu.setLoop(true); musMenu.play(); }
-    if(musLevel.openFromFile(GameConfig::SND_LEVEL)){ musLevel.setLoop(true); }
+    audioManager.loadAssets();
     applyVolume();
 }
 
@@ -60,9 +46,17 @@ void Game::cleanEntities() {
 void Game::loadSettings() {
     std::ifstream file("settings.cfg");
     if (file.is_open()) {
+        // settings.cfg format: <volume> <mutedFlag>
+        // If mutedFlag is absent, default to not muted for backward compatibility.
         float savedVolume;
+        int mutedFlag = 0;
         if (file >> savedVolume) {
             masterVolume = std::clamp(savedVolume, 0.0f, 100.0f);
+            if (file >> mutedFlag) {
+                isMuted = (mutedFlag != 0);
+            } else {
+                isMuted = false;
+            }
         }
     }
 }
@@ -70,21 +64,14 @@ void Game::loadSettings() {
 void Game::saveSettings() {
     std::ofstream file("settings.cfg");
     if (file.is_open()) {
-        file << masterVolume;
+        // Persist volume and muted flag (0/1)
+        file << masterVolume << " " << (isMuted ? 1 : 0);
     }
 }
 
 void Game::applyVolume() {
-    sndJump.setVolume(masterVolume);
-    sndAbsorb.setVolume(masterVolume);
-    sndHit.setVolume(masterVolume);
-    sndDamage.setVolume(masterVolume);
-    sndEnemyDie.setVolume(masterVolume);
-    sndDeath.setVolume(masterVolume);
-    sndDoor.setVolume(masterVolume);
-    sndBossBattle.setVolume(masterVolume);
-    musMenu.setVolume(masterVolume);
-    musLevel.setVolume(masterVolume);
+    // Apply volume to audio manager; pass 0 when muted so all sounds are silenced.
+    audioManager.applyVolume(isMuted ? 0.0f : masterVolume);
 }
 
 void Game::adjustVolume(int delta) {
@@ -94,15 +81,7 @@ void Game::adjustVolume(int delta) {
 }
 
 void Game::updateMusic() {
-    GameMode mode = sharedState.getMode();
-    if (mode == GameMode::MENU || mode == GameMode::INSTRUCTIONS || mode == GameMode::GAME_OVER || mode == GameMode::VICTORY) {
-        if (musMenu.getStatus() != sf::SoundSource::Playing) {
-            musLevel.stop();
-            sndBossBattle.stop();
-            musMenu.setLoop(true);
-            musMenu.play();
-        }
-    }
+    audioManager.updateMusic(sharedState.getMode(), sharedState.currentLevel, lastMusicLevel);
 }
 
 void Game::run() {
@@ -110,16 +89,32 @@ void Game::run() {
         processEvents();
         update();
         updateMusic();
+        // Copy sound flags while holding the mutex, then process audio outside
+        // the critical section to avoid calling SFML/audio APIs while other
+        // threads wait on the game mutex.
+        bool pJump=false,pAbs=false,sAbs=false,pHit=false,pDmg=false,pEDie=false,pDeath=false,pDoor=false;
         pthread_mutex_lock(&sharedState.gameMutex);
-        if(sharedState.playSoundJump){sndJump.play();sharedState.playSoundJump=false;}
-        if(sharedState.playSoundAbsorb){sndAbsorb.setLoop(true);sndAbsorb.play();sharedState.playSoundAbsorb=false;}
-        if(sharedState.stopSoundAbsorb){sndAbsorb.setLoop(false);sndAbsorb.stop();sharedState.stopSoundAbsorb=false;}
-        if(sharedState.playSoundHit){sndHit.play();sharedState.playSoundHit=false;}
-        if(sharedState.playSoundDamage){sndDamage.play();sharedState.playSoundDamage=false;}
-        if(sharedState.playSoundDeath){sndDeath.play();sharedState.playSoundDeath=false;}
-        if(sharedState.playSoundDoor){sndDoor.play();sharedState.playSoundDoor=false;}
-        if(sharedState.playSoundEnemyDie){sndEnemyDie.play();sharedState.playSoundEnemyDie=false;}
+        pJump = sharedState.playSoundJump;
+        pAbs = sharedState.playSoundAbsorb;
+        sAbs = sharedState.stopSoundAbsorb;
+        pHit = sharedState.playSoundHit;
+        pDmg = sharedState.playSoundDamage;
+        pEDie = sharedState.playSoundEnemyDie;
+        pDeath = sharedState.playSoundDeath;
+        pDoor = sharedState.playSoundDoor;
+        // Clear flags so other threads don't re-trigger them
+        sharedState.playSoundJump = false;
+        sharedState.playSoundAbsorb = false;
+        sharedState.stopSoundAbsorb = false;
+        sharedState.playSoundHit = false;
+        sharedState.playSoundDamage = false;
+        sharedState.playSoundEnemyDie = false;
+        sharedState.playSoundDeath = false;
+        sharedState.playSoundDoor = false;
         pthread_mutex_unlock(&sharedState.gameMutex);
+
+        // Now safe to call audio APIs without holding the sharedState mutex
+        audioManager.processSoundEventsSnapshot(pJump, pAbs, sAbs, pHit, pDmg, pEDie, pDeath, pDoor);
         render();
     }
 }
@@ -130,24 +125,37 @@ void Game::processEvents() {
         if (e.type == sf::Event::Closed) window.close();
         if (e.type == sf::Event::KeyPressed) {
             GameMode mode = sharedState.getMode();
+            // Space toggles mute in non-paused modes (pause keeps its own M behavior)
+            // Use Space so it's quick to reach while playing.
+            if (e.key.code == sf::Keyboard::Space && mode != GameMode::PAUSED) {
+                isMuted = !isMuted;
+                applyVolume();
+                saveSettings();
+            }
             if (mode == GameMode::MENU) {
                 if (e.key.code == sf::Keyboard::Num1) startGame(GameMode::MODE_1_PLAYER);
                 if (e.key.code == sf::Keyboard::Num2) startGame(GameMode::MODE_2_CPU);
                 if (e.key.code == sf::Keyboard::I) sharedState.setMode(GameMode::INSTRUCTIONS);
-                if (e.key.code == sf::Keyboard::O) adjustVolume(-5);
-                if (e.key.code == sf::Keyboard::P) adjustVolume(5);
+                if (e.key.code == sf::Keyboard::Left) adjustVolume(-5);
+                if (e.key.code == sf::Keyboard::Right) adjustVolume(5);
                 if (e.key.code == sf::Keyboard::Escape) window.close();
             } else if (mode == GameMode::INSTRUCTIONS) {
                 if (e.key.code == sf::Keyboard::Escape) sharedState.setMode(GameMode::MENU);
             } else if (mode == GameMode::PAUSED) {
-                if (e.key.code == sf::Keyboard::Escape) sharedState.setMode(GameMode::MODE_1_PLAYER);
+                if (e.key.code == sf::Keyboard::Escape) {
+                    sharedState.setMode(pausedModeBeforePause);
+                }
+                // In PAUSED mode, 'M' returns to main menu by resetting the game.
                 if (e.key.code == sf::Keyboard::M) { resetGame(); sharedState.setMode(GameMode::MENU); }
-                if (e.key.code == sf::Keyboard::O) adjustVolume(-5);
-                if (e.key.code == sf::Keyboard::P) adjustVolume(5);
+                if (e.key.code == sf::Keyboard::Left) adjustVolume(-5);
+                if (e.key.code == sf::Keyboard::Right) adjustVolume(5);
             } else if (mode == GameMode::GAME_OVER || mode == GameMode::VICTORY) {
                 if (e.key.code == sf::Keyboard::Escape) resetGame();
             } else if ((mode == GameMode::MODE_1_PLAYER || mode == GameMode::MODE_2_CPU) && sharedState.kirby) {
-                if (e.key.code == sf::Keyboard::Escape) sharedState.setMode(GameMode::PAUSED);
+                if (e.key.code == sf::Keyboard::Escape || e.key.code == sf::Keyboard::P) {
+                    pausedModeBeforePause = mode;
+                    sharedState.setMode(GameMode::PAUSED);
+                }
                 if (mode == GameMode::MODE_1_PLAYER) {
                     if (e.key.code == sf::Keyboard::Z) sharedState.kirby->jump(&sharedState);
                     if (e.key.code == sf::Keyboard::X) {
@@ -163,6 +171,64 @@ void Game::processEvents() {
                         sharedState.kirby->swallow(&sharedState);
                     }
                 }
+            }
+        }
+        // Mouse interactions for sliders
+        if (e.type == sf::Event::MouseButtonPressed) {
+            if (e.mouseButton.button == sf::Mouse::Left) {
+                GameMode mode = sharedState.getMode();
+                int mx = e.mouseButton.x;
+                int my = e.mouseButton.y;
+                // Main menu slider area
+                if (mode == GameMode::MENU) {
+                    float sliderX = 240.0f;
+                    float sliderY = 540.0f;
+                    float sliderW = 320.0f;
+                    float sliderH = 20.0f;
+                    if (mx >= sliderX && mx <= sliderX + sliderW && my >= sliderY && my <= sliderY + sliderH) {
+                        draggingMainSlider = true;
+                        float rel = (mx - sliderX) / sliderW;
+                        masterVolume = std::clamp(rel * 100.0f, 0.0f, 100.0f);
+                        applyVolume(); saveSettings();
+                    }
+                }
+                // Pause menu slider area
+                if (mode == GameMode::PAUSED) {
+                    float sliderX = 250.0f;
+                    float sliderY = 390.0f;
+                    float sliderW = 300.0f;
+                    float sliderH = 18.0f;
+                    if (mx >= sliderX && mx <= sliderX + sliderW && my >= sliderY && my <= sliderY + sliderH) {
+                        draggingPauseSlider = true;
+                        float rel = (mx - sliderX) / sliderW;
+                        masterVolume = std::clamp(rel * 100.0f, 0.0f, 100.0f);
+                        applyVolume(); saveSettings();
+                    }
+                }
+            }
+        }
+        if (e.type == sf::Event::MouseButtonReleased) {
+            if (e.mouseButton.button == sf::Mouse::Left) {
+                draggingMainSlider = false;
+                draggingPauseSlider = false;
+            }
+        }
+        if (e.type == sf::Event::MouseMoved) {
+            if (draggingMainSlider) {
+                float sliderX = 240.0f;
+                float sliderW = 320.0f;
+                float mx = (float)e.mouseMove.x;
+                float rel = (mx - sliderX) / sliderW;
+                masterVolume = std::clamp(rel * 100.0f, 0.0f, 100.0f);
+                applyVolume(); saveSettings();
+            }
+            if (draggingPauseSlider) {
+                float sliderX = 250.0f;
+                float sliderW = 300.0f;
+                float mx = (float)e.mouseMove.x;
+                float rel = (mx - sliderX) / sliderW;
+                masterVolume = std::clamp(rel * 100.0f, 0.0f, 100.0f);
+                applyVolume(); saveSettings();
             }
         }
         if (e.type == sf::Event::KeyReleased && sharedState.getMode() == GameMode::MODE_1_PLAYER && sharedState.kirby) {
@@ -190,10 +256,9 @@ void Game::resetGame() {
     sharedState.score = 0;
     sharedState.currentLevel = 0;
     cleanEntities();
-    musLevel.stop();
-    sndBossBattle.stop();
+    audioManager.stopAllMusic();
     lastMusicLevel = -1;
-    if(musMenu.getStatus() != sf::SoundSource::Playing) musMenu.play();
+    audioManager.updateMusic(GameMode::MENU, sharedState.currentLevel, lastMusicLevel);
     pthread_mutex_unlock(&sharedState.gameMutex);
 }
 
@@ -205,9 +270,7 @@ void Game::startGame(GameMode mode) {
     sharedState.cameraX = 0;
     cleanEntities();
     sharedState.kirby = new Kirby(100, 300);
-    musMenu.stop();
-    musLevel.stop();
-    sndBossBattle.stop();
+    audioManager.stopAllMusic();
     lastMusicLevel = -1;
     loadLevel(sharedState.currentLevel);
     running = true;
@@ -246,21 +309,7 @@ void Game::loadLevel(int level) {
     float groundY = GameConfig::WINDOW_HEIGHT - 32;
 
     // Music management
-    if (level == 3) {
-        if (lastMusicLevel != 3 || sndBossBattle.getStatus() != sf::SoundSource::Playing) {
-            musLevel.stop();
-            sndBossBattle.setPlayingOffset(sf::seconds(0));
-            sndBossBattle.play();
-            lastMusicLevel = 3;
-        }
-    } else {
-        if (lastMusicLevel < 0 || lastMusicLevel == 3 || musLevel.getStatus() != sf::SoundSource::Playing) {
-            sndBossBattle.stop();
-            musLevel.setPlayingOffset(sf::seconds(0));
-            musLevel.play();
-            lastMusicLevel = level;
-        }
-    }
+    audioManager.updateMusic(sharedState.getMode(), level, lastMusicLevel);
 
     if (level == 3) {
         // Boss arena: wider, 50 tiles wide
@@ -412,20 +461,30 @@ void Game::render() {
 
         sf::Text t; t.setFont(font); t.setFillColor(sf::Color::White);
         if (mode == GameMode::MENU) {
+            sf::RectangleShape menuCard(sf::Vector2f(520, 380));
+            menuCard.setPosition(140, 110);
+            menuCard.setFillColor(sf::Color(15, 15, 35, 220));
+            menuCard.setOutlineColor(sf::Color(255, 182, 193));
+            menuCard.setOutlineThickness(4);
+            window.draw(menuCard);
+
             t.setString("KIRBY CLASICO"); t.setCharacterSize(60);
             t.setStyle(sf::Text::Bold); t.setFillColor(sf::Color(255,182,193));
-            t.setPosition(150, 100); window.draw(t);
+            t.setPosition(180, 140); window.draw(t);
             
-            t.setCharacterSize(24); t.setFillColor(sf::Color::White);
+            t.setCharacterSize(24); t.setFillColor(sf::Color(220,220,255));
+            t.setStyle(sf::Text::Regular);
             t.setString("1 - Modo 1 Jugador\n\n2 - Modo CPU vs Enemigos\n\nI - Instrucciones\n\nESC - Salir");
-            t.setPosition(250, 350); window.draw(t);
+            t.setPosition(210, 230); window.draw(t);
 
-            float sliderWidth = 260.0f;
-            float sliderHeight = 18.0f;
-            float sliderX = (GameConfig::WINDOW_WIDTH - sliderWidth) / 2.0f;
-            float sliderY = 280.0f;
+            float sliderWidth = 320.0f;
+            float sliderHeight = 20.0f;
+            float sliderX = 240.0f;
+            float sliderY = 540.0f; // moved down to avoid overlapping menu text
             sf::RectangleShape sliderBg(sf::Vector2f(sliderWidth, sliderHeight));
-            sliderBg.setFillColor(sf::Color(80, 80, 80, 220));
+            sliderBg.setFillColor(sf::Color(70, 70, 90, 220));
+            sliderBg.setOutlineColor(sf::Color(255, 182, 193));
+            sliderBg.setOutlineThickness(2);
             sliderBg.setPosition(sliderX, sliderY);
             window.draw(sliderBg);
 
@@ -434,14 +493,28 @@ void Game::render() {
             sliderFill.setPosition(sliderX, sliderY);
             window.draw(sliderFill);
 
-            t.setCharacterSize(18);
-            t.setFillColor(sf::Color::White);
-            t.setString("Volumen: " + std::to_string((int)masterVolume) + "%   O / P");
-            t.setPosition(sliderX, sliderY - 28.0f);
+            sf::CircleShape knob(10);
+            knob.setFillColor(sf::Color(255, 255, 255));
+            knob.setPosition(sliderX + sliderWidth * (masterVolume / 100.0f) - 10, sliderY - 6);
+            window.draw(knob);
+
+            t.setCharacterSize(20);
+            t.setFillColor(sf::Color(220,220,255));
+            t.setString("Volumen: " + std::to_string((int)masterVolume) + "%");
+            t.setPosition(sliderX, sliderY - 40.0f); // label above slider
             window.draw(t);
-            t.setString("Volumen guardado automaticamente.");
-            t.setPosition(sliderX, sliderY + 24.0f);
+            t.setString("Mouse para ajustar");
+            t.setPosition(sliderX, sliderY + 30.0f); // helper below slider
             window.draw(t);
+
+            // MUTED indicator for menus (only shown in menus, not during gameplay)
+            if (isMuted) {
+                sf::Text mutedText; mutedText.setFont(font);
+                mutedText.setString("MUTED"); mutedText.setCharacterSize(18);
+                mutedText.setFillColor(sf::Color::Red); mutedText.setStyle(sf::Text::Bold);
+                mutedText.setPosition(sliderX + sliderWidth + 12.0f, sliderY - 6.0f);
+                window.draw(mutedText);
+            }
         } else {
             t.setString("INSTRUCCIONES"); t.setCharacterSize(40); t.setPosition(250, 50); window.draw(t);
             t.setCharacterSize(20);
@@ -471,18 +544,59 @@ void Game::render() {
         }
         for (auto* e : sharedState.enemies) if(e) e->render(window, camX);
         if (sharedState.kirby) sharedState.kirby->render(window, camX);
-        
-        // Overlay de pausa
+
         sf::RectangleShape pauseOverlay(sf::Vector2f(GameConfig::WINDOW_WIDTH, GameConfig::WINDOW_HEIGHT));
-        pauseOverlay.setFillColor(sf::Color(0, 0, 0, 150));
+        pauseOverlay.setFillColor(sf::Color(0, 0, 0, 140));
         window.draw(pauseOverlay);
-        
-        sf::Text t; t.setFont(font); t.setCharacterSize(50);
-        t.setString("PAUSA"); t.setFillColor(sf::Color::White);
-        t.setPosition(300, 150); window.draw(t);
-        t.setCharacterSize(24);
-        t.setString("ESC - Continuar\nM - Volver al menu principal\nO / P - Ajustar volumen");
-        t.setPosition(220, 250); window.draw(t);
+
+        sf::RectangleShape panel(sf::Vector2f(420, 320));
+        panel.setPosition(190, 130);
+        panel.setFillColor(sf::Color(25, 25, 45, 230));
+        panel.setOutlineColor(sf::Color(255, 255, 255, 180));
+        panel.setOutlineThickness(3);
+        window.draw(panel);
+
+        sf::Text t; t.setFont(font);
+        t.setString("PAUSA"); t.setCharacterSize(48); t.setFillColor(sf::Color(255, 230, 210));
+        t.setStyle(sf::Text::Bold);
+        t.setPosition(320, 150); window.draw(t);
+
+        t.setCharacterSize(22); t.setStyle(sf::Text::Regular); t.setFillColor(sf::Color(235,235,245));
+        t.setString("ESC - Continuar\nM - Volver al menu principal\nAjustar volumen con mouse\n\nNivel: " + std::to_string(sharedState.currentLevel + 1) + "   Puntaje: " + std::to_string(sharedState.score));
+        t.setPosition(230, 220); window.draw(t);
+
+        float sliderX = 250.0f;
+        float sliderY = 390.0f; // moved down to sit below pause text
+        float sliderW = 300.0f;
+        sf::RectangleShape sliderBg(sf::Vector2f(sliderW, 18));
+        sliderBg.setPosition(sliderX, sliderY);
+        sliderBg.setFillColor(sf::Color(70, 70, 90, 220));
+        sliderBg.setOutlineColor(sf::Color(255, 182, 193));
+        sliderBg.setOutlineThickness(2);
+        window.draw(sliderBg);
+
+        sf::RectangleShape sliderFill(sf::Vector2f(sliderW * (masterVolume / 100.0f), 18));
+        sliderFill.setFillColor(sf::Color(255, 182, 193));
+        sliderFill.setPosition(sliderX, sliderY);
+        window.draw(sliderFill);
+
+        sf::CircleShape knob(9);
+        knob.setFillColor(sf::Color(255,255,255));
+        knob.setPosition(sliderX + sliderW * (masterVolume / 100.0f) - 9, sliderY - 6);
+        window.draw(knob);
+
+        t.setCharacterSize(18);
+        t.setFillColor(sf::Color(210,210,230));
+        t.setString("Volumen: " + std::to_string((int)masterVolume) + "%");
+        t.setPosition(sliderX, sliderY + 26); window.draw(t);
+        // MUTED indicator for pause menu
+        if (isMuted) {
+            sf::Text mutedText; mutedText.setFont(font);
+            mutedText.setString("MUTED"); mutedText.setCharacterSize(18);
+            mutedText.setFillColor(sf::Color::Red); mutedText.setStyle(sf::Text::Bold);
+            mutedText.setPosition(sliderX + sliderW + 12.0f, sliderY - 6.0f);
+            window.draw(mutedText);
+        }
     } else {
         // Parallax background
         levelBgSprite.setPosition(-((int)(camX * 0.2f) % (int)levelBgSprite.getGlobalBounds().width), 0);
