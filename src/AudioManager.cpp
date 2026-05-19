@@ -3,9 +3,11 @@
 #include <iostream>
 #include <algorithm>
 
+//Implementación de AudioManager
 AudioManager::AudioManager()
     : masterVolume(50.0f), absorbPlaying(false), fadingFrom(nullptr), fadingTo(nullptr), isCrossfading(false), fadeElapsed(0.0f), fadeDuration(1.0f) {}
 
+// Cargar todos los assets de audio (sonidos y música). Retorna true si todos se cargaron correctamente.
 bool AudioManager::loadAssets() {
     bool ok = true;
     if (sbufJump.loadFromFile(GameConfig::SND_JUMP)) sndJump.setBuffer(sbufJump);
@@ -44,6 +46,7 @@ bool AudioManager::loadAssets() {
     return ok;
 }
 
+// Aplicar el volumen maestro a todos los sonidos y música. El volumen se clampa entre 0 y 100.
 void AudioManager::applyVolume(float volume) {
     masterVolume = std::clamp(volume, 0.0f, 100.0f);
     sndJump.setVolume(masterVolume);
@@ -58,7 +61,7 @@ void AudioManager::applyVolume(float volume) {
     musBossBattle.setVolume(masterVolume);
 }
 
-// Internal helper to start crossfade to a target music
+// Detener toda la música (usada al pausar o al volver al menú para evitar que varias pistas se superpongan).
 void AudioManager::startCrossfade(sf::Music* target) {
     if (!target) return;
     if (fadingTo == target) return;
@@ -79,7 +82,7 @@ void AudioManager::startCrossfade(sf::Music* target) {
     if (fadingTo->getStatus() != sf::SoundSource::Playing) fadingTo->play();
 }
 
-// Progress an ongoing crossfade — called from updateMusic
+// Implementar la lógica de crossfade en cada actualización de música. Esto se llama periódicamente desde `updateMusic()`.
 void AudioManager::progressCrossfade() {
     if (!isCrossfading) return;
     // Compute delta time since last progress call and lerp volumes.
@@ -99,12 +102,14 @@ void AudioManager::progressCrossfade() {
     }
 }
 
+// Detener toda la música.
 void AudioManager::stopAllMusic() {
     musMenu.stop();
     musLevel.stop();
     musBossBattle.stop();
 }
 
+// Actualizar la música según el modo de juego actual y el nivel. Cambia a la pista apropiada para el menú, niveles o batalla de jefe, usando crossfade para transiciones suaves.
 void AudioManager::updateMusic(GameMode mode, int currentLevel, int& lastMusicLevel) {
     // Progress any active crossfade
     if (isCrossfading) progressCrossfade();
@@ -133,6 +138,7 @@ void AudioManager::updateMusic(GameMode mode, int currentLevel, int& lastMusicLe
     }
 }
 
+// Procesar eventos de sonido basados en las banderas dentro de SharedState. Esto se llama desde el hilo principal, por lo que es seguro llamar a las APIs de audio de SFML aquí.
 void AudioManager::processSoundEvents(SharedState& state) {
     if (absorbPlaying && sndAbsorb.getStatus() != sf::SoundSource::Playing) {
         absorbPlaying = false;
@@ -179,7 +185,9 @@ void AudioManager::processSoundEvents(SharedState& state) {
     }
 }
 
+//Procesar un snapshot de eventos de sonido (banderas) sin necesidad de mantener el mutex de SharedState, para evitar bloqueos y errores de audio al llamar a las APIs de SFML desde el hilo principal.
 void AudioManager::processSoundEventsSnapshot(bool playJump, bool playAbsorb, bool stopAbsorb, bool playHit, bool playDamage, bool playEnemyDie, bool playDeath, bool playDoor) {
+    // Guardar el estado del sonido de absorción para no reiniciarlo cada frame.
     if (absorbPlaying && sndAbsorb.getStatus() != sf::SoundSource::Playing) {
         absorbPlaying = false;
     }

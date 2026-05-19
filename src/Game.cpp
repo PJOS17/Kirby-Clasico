@@ -46,16 +46,20 @@ void Game::cleanEntities() {
 void Game::loadSettings() {
     std::ifstream file("settings.cfg");
     if (file.is_open()) {
-        // settings.cfg format: <volume> <mutedFlag>
-        // If mutedFlag is absent, default to not muted for backward compatibility.
+        // settings.cfg format: <volume> <mutedFlag> <bestScore>
+        // If fields are absent, defaults are used for backwards compatibility.
         float savedVolume;
         int mutedFlag = 0;
+        int savedBestScore = 0;
         if (file >> savedVolume) {
             masterVolume = std::clamp(savedVolume, 0.0f, 100.0f);
             if (file >> mutedFlag) {
                 isMuted = (mutedFlag != 0);
             } else {
                 isMuted = false;
+            }
+            if (file >> savedBestScore) {
+                bestScore = std::max(0, savedBestScore);
             }
         }
     }
@@ -64,8 +68,8 @@ void Game::loadSettings() {
 void Game::saveSettings() {
     std::ofstream file("settings.cfg");
     if (file.is_open()) {
-        // Persist volume and muted flag (0/1)
-        file << masterVolume << " " << (isMuted ? 1 : 0);
+        // Persist volume, muted flag (0/1), and best score.
+        file << masterVolume << " " << (isMuted ? 1 : 0) << " " << bestScore;
     }
 }
 
@@ -89,9 +93,9 @@ void Game::run() {
         processEvents();
         update();
         updateMusic();
-        // Copy sound flags while holding the mutex, then process audio outside
-        // the critical section to avoid calling SFML/audio APIs while other
-        // threads wait on the game mutex.
+        // Copiar banderas de sonido mientras se mantiene el mutex,
+        // luego procesarlas fuera del mutex para evitar bloqueos y errores
+        // de audio cuando SFML se ejecuta desde el hilo principal.
         bool pJump=false,pAbs=false,sAbs=false,pHit=false,pDmg=false,pEDie=false,pDeath=false,pDoor=false;
         pthread_mutex_lock(&sharedState.gameMutex);
         pJump = sharedState.playSoundJump;
@@ -151,6 +155,11 @@ void Game::processEvents() {
                 if (e.key.code == sf::Keyboard::Right) adjustVolume(5);
             } else if (mode == GameMode::GAME_OVER || mode == GameMode::VICTORY) {
                 if (e.key.code == sf::Keyboard::Escape) resetGame();
+                if (mode == GameMode::GAME_OVER && e.key.code == sf::Keyboard::R) {
+                    GameMode retryMode = lastGameplayMode;
+                    resetGame();
+                    startGame(retryMode);
+                }
             } else if ((mode == GameMode::MODE_1_PLAYER || mode == GameMode::MODE_2_CPU) && sharedState.kirby) {
                 if (e.key.code == sf::Keyboard::Escape || e.key.code == sf::Keyboard::P) {
                     pausedModeBeforePause = mode;
@@ -179,7 +188,7 @@ void Game::processEvents() {
                 GameMode mode = sharedState.getMode();
                 int mx = e.mouseButton.x;
                 int my = e.mouseButton.y;
-                // Main menu slider area
+                // Área del slider del menú principal: clic para ajustar volumen.
                 if (mode == GameMode::MENU) {
                     float sliderX = 240.0f;
                     float sliderY = 540.0f;
@@ -192,7 +201,7 @@ void Game::processEvents() {
                         applyVolume(); saveSettings();
                     }
                 }
-                // Pause menu slider area
+                // Área del slider del menú de pausa: clic para ajustar volumen.
                 if (mode == GameMode::PAUSED) {
                     float sliderX = 250.0f;
                     float sliderY = 390.0f;
@@ -215,6 +224,7 @@ void Game::processEvents() {
         }
         if (e.type == sf::Event::MouseMoved) {
             if (draggingMainSlider) {
+                // Al arrastrar el ratón sobre el slider del menú, actualizar volumen.
                 float sliderX = 240.0f;
                 float sliderW = 320.0f;
                 float mx = (float)e.mouseMove.x;
@@ -223,6 +233,7 @@ void Game::processEvents() {
                 applyVolume(); saveSettings();
             }
             if (draggingPauseSlider) {
+                // Al arrastrar el ratón sobre el slider de pausa, actualizar volumen.
                 float sliderX = 250.0f;
                 float sliderW = 300.0f;
                 float mx = (float)e.mouseMove.x;
@@ -263,6 +274,7 @@ void Game::resetGame() {
 }
 
 void Game::startGame(GameMode mode) {
+    lastGameplayMode = mode;
     pthread_mutex_lock(&sharedState.gameMutex);
     sharedState.setMode(mode);
     sharedState.score = 0;
@@ -442,6 +454,10 @@ void* Game::enemyLogic(void* arg) {
 
 void Game::update() {
     pthread_mutex_lock(&sharedState.gameMutex);
+    if (sharedState.score > bestScore) {
+        bestScore = sharedState.score;
+        saveSettings();
+    }
     if(sharedState.statusMessage == "NEXT_LEVEL") nextLevel();
     pthread_mutex_unlock(&sharedState.gameMutex);
 }
@@ -470,12 +486,18 @@ void Game::render() {
 
             t.setString("KIRBY CLASICO"); t.setCharacterSize(60);
             t.setStyle(sf::Text::Bold); t.setFillColor(sf::Color(255,182,193));
-            t.setPosition(180, 140); window.draw(t);
+            t.setPosition(170, 140); window.draw(t);
             
             t.setCharacterSize(24); t.setFillColor(sf::Color(220,220,255));
             t.setStyle(sf::Text::Regular);
             t.setString("1 - Modo 1 Jugador\n\n2 - Modo CPU vs Enemigos\n\nI - Instrucciones\n\nESC - Salir");
             t.setPosition(210, 230); window.draw(t);
+
+            // Mostrar el mejor puntaje guardado por encima del título del menú.
+            t.setCharacterSize(20); t.setFillColor(sf::Color(255,255,255));
+            t.setString("Mejor puntaje: " + std::to_string(bestScore));
+            t.setPosition(300, 50);
+            window.draw(t);
 
             float sliderWidth = 320.0f;
             float sliderHeight = 20.0f;
@@ -507,7 +529,7 @@ void Game::render() {
             t.setPosition(sliderX, sliderY + 30.0f); // helper below slider
             window.draw(t);
 
-            // MUTED indicator for menus (only shown in menus, not during gameplay)
+            // Mensaje de "MUTED" si el sonido está silenciado, para mayor claridad al usar el botón de silencio o arrastrar el slider a 0.
             if (isMuted) {
                 sf::Text mutedText; mutedText.setFont(font);
                 mutedText.setString("MUTED"); mutedText.setCharacterSize(18);
@@ -522,12 +544,65 @@ void Game::render() {
             t.setPosition(100, 150); window.draw(t);
         }
     } else if (mode == GameMode::GAME_OVER || mode == GameMode::VICTORY) {
-        sf::Text t; t.setFont(font); t.setCharacterSize(50);
-        t.setString(mode == GameMode::GAME_OVER ? "GAME OVER" : "VICTORY!");
-        t.setFillColor(mode == GameMode::GAME_OVER ? sf::Color::Red : sf::Color::Yellow);
-        t.setPosition(250, 200); window.draw(t);
-        t.setCharacterSize(24); t.setFillColor(sf::Color::White);
-        t.setString("Presiona ESC para volver"); t.setPosition(260, 300); window.draw(t);
+        sf::RectangleShape panel(sf::Vector2f(520, 320));
+        panel.setPosition(140, 150);
+        panel.setFillColor(sf::Color(18, 28, 72, 230));
+        panel.setOutlineColor(sf::Color::White);
+        panel.setOutlineThickness(4);
+        window.draw(panel);
+
+        sf::Text t; t.setFont(font);
+        if (mode == GameMode::GAME_OVER) {
+            t.setCharacterSize(56);
+            t.setString("MORISTE");
+            t.setFillColor(sf::Color::White);
+            t.setStyle(sf::Text::Bold);
+            t.setPosition(240, 180);
+            window.draw(t);
+
+            t.setCharacterSize(28);
+            t.setStyle(sf::Text::Regular);
+            t.setFillColor(sf::Color::White);
+            t.setString("Te quedaste sin vidas");
+            t.setPosition(210, 250);
+            window.draw(t);
+
+            t.setCharacterSize(20);
+            t.setString("Mejor puntaje: " + std::to_string(bestScore));
+            t.setPosition(220, 290);
+            window.draw(t);
+
+            sf::RectangleShape retryBtn(sf::Vector2f(220, 50));
+            retryBtn.setFillColor(sf::Color::White);
+            retryBtn.setPosition(180, 320);
+            window.draw(retryBtn);
+            sf::Text retryText; retryText.setFont(font);
+            retryText.setString("R - Reintentar"); retryText.setCharacterSize(24);
+            retryText.setFillColor(sf::Color::Black); retryText.setPosition(210, 333);
+            window.draw(retryText);
+
+            sf::RectangleShape menuBtn(sf::Vector2f(220, 50));
+            menuBtn.setFillColor(sf::Color::White);
+            menuBtn.setPosition(340, 320);
+            window.draw(menuBtn);
+            sf::Text menuText; menuText.setFont(font);
+            menuText.setString("ESC - Menu"); menuText.setCharacterSize(24);
+            menuText.setFillColor(sf::Color::Black); menuText.setPosition(380, 333);
+            window.draw(menuText);
+        } else {
+            t.setCharacterSize(50);
+            t.setString("VICTORY!");
+            t.setFillColor(sf::Color::White);
+            t.setStyle(sf::Text::Bold);
+            t.setPosition(240, 190);
+            window.draw(t);
+            t.setCharacterSize(24);
+            t.setStyle(sf::Text::Regular);
+            t.setFillColor(sf::Color::White);
+            t.setString("Presiona ESC para volver");
+            t.setPosition(250, 300);
+            window.draw(t);
+        }
     } else if (mode == GameMode::PAUSED) {
         // Renderizar el juego de fondo
         levelBgSprite.setPosition(-((int)(camX * 0.2f) % (int)levelBgSprite.getGlobalBounds().width), 0);

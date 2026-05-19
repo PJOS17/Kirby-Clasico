@@ -42,6 +42,7 @@ private:
     bool draggingPauseSlider = false;
     // Master mute flag (persisted to settings.cfg)
     bool isMuted = false;
+    int bestScore = 0;
     
     pthread_t kirbyThread;
     pthread_t enemyThread;
@@ -55,6 +56,7 @@ private:
     AudioManager audioManager;
     int lastMusicLevel;
     GameMode pausedModeBeforePause;
+    GameMode lastGameplayMode = GameMode::MENU;
 };
 
 #endif

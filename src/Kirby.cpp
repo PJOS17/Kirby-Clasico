@@ -252,6 +252,7 @@ void Kirby::render(sf::RenderWindow& win, float camX) {
         float texH = sprite.getTexture()->getSize().y * scale;
         float drawY = y + 48 - texH;
         
+        // Cambiar el color del sprite de Kirby según la habilidad activa.
         if (ability == Ability::FIRE) sprite.setColor(sf::Color(255, 150, 150));
         else if (ability == Ability::SWORD) sprite.setColor(sf::Color(150, 255, 150));
         else if (ability == Ability::SPARK) sprite.setColor(sf::Color(255, 255, 150));
@@ -260,6 +261,7 @@ void Kirby::render(sf::RenderWindow& win, float camX) {
         else sprite.setColor(sf::Color(255, 255, 255));
 
         sprite.setPosition(drawX, drawY);
+        // Si Kirby mira a la izquierda, invertir el sprite horizontalmente.
         if (direction==-1) { 
             if (state == KirbyState::WALKING) { sprite.setScale(scale, scale); sprite.setOrigin(0, 0); } // 277/278 face left natively
             else { sprite.setScale(-scale, scale); sprite.setOrigin((float)sprite.getTexture()->getSize().x, 0); }
