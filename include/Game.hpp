@@ -19,6 +19,7 @@ private:
     void render();
     
     void startGame(GameMode mode);
+    void startPlayerSelection();
     void resetGame();
     void nextLevel();
     void loadLevel(int level);
@@ -43,14 +44,17 @@ private:
     // Master mute flag (persisted to settings.cfg)
     bool isMuted = false;
     int bestScore = 0;
+    int bestScoreByPlayer[3] = {0, 0, 0};
+    int currentPlayerIndex = -1;
+    std::string currentPlayerName;
     
     pthread_t kirbyThread;
     pthread_t enemyThread;
 
     sf::Font font;
-    sf::Texture bgTex, bgInstructionsTex, groundTex, platformTex, doorLeftTex, doorRightTex, doorStarTex;
+    sf::Texture bgTex, bgInstructionsTex, highScoresBgTex, groundTex, platformTex, doorLeftTex, doorRightTex, doorStarTex;
     sf::Texture levelBgTex;
-    sf::Sprite bgSprite, bgInstructionsSprite, groundSprite, platformSprite, doorLeftSprite, doorRightSprite, doorStarSprite;
+    sf::Sprite bgSprite, bgInstructionsSprite, highScoresBgSprite, groundSprite, platformSprite, doorLeftSprite, doorRightSprite, doorStarSprite;
     sf::Sprite levelBgSprite;
 
     AudioManager audioManager;

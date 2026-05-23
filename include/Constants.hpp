@@ -38,7 +38,7 @@ namespace GameConfig {
     const std::string SND_BOSS_BATTLE = "Sounds/Sonnido batallas contra jefes.mp3";
 }
 
-enum class GameMode { MENU, INSTRUCTIONS, MODE_1_PLAYER, MODE_2_CPU, GAME_OVER, VICTORY, PAUSED };
+enum class GameMode { MENU, INSTRUCTIONS, PLAYER_SELECT, HIGH_SCORES, MODE_1_PLAYER, MODE_2_CPU, GAME_OVER, VICTORY, PAUSED };
 enum class KirbyState { IDLE, WALKING, JUMPING, FLOATING, ABSORBING, HAS_ENEMY, SPITTING, USING_ABILITY, HURT, DEAD };
 enum class Ability { NONE, FIRE, SWORD, SPARK, BEAM, BOMB, BOMB_RETURN };
 enum class TileType { GROUND, PLATFORM, SPIKE, DOOR };

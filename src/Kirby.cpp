@@ -149,6 +149,7 @@ void Kirby::update(SharedState* ss) {
             if (kb.intersects(dr)) {
                 if (!bossAlive || ss->currentLevel >= GameConfig::NUM_LEVELS-1) {
                     ss->playSoundDoor = true;
+                    ss->score += 150 * ss->kirby->getLives();
                     if (ss->currentLevel < GameConfig::NUM_LEVELS-1) { ss->currentLevel++; ss->statusMessage="NEXT_LEVEL"; }
                     else ss->setMode(GameMode::VICTORY);
                     break;
