@@ -4,6 +4,8 @@
 #include <SFML/Graphics.hpp>
 #include <SFML/Audio.hpp>
 #include <pthread.h>
+#include <string>
+#include <unordered_map>
 #include "SharedState.hpp"
 #include "AudioManager.hpp"
 
@@ -44,9 +46,12 @@ private:
     // Master mute flag (persisted to settings.cfg)
     bool isMuted = false;
     int bestScore = 0;
-    int bestScoreByPlayer[3] = {0, 0, 0};
-    int currentPlayerIndex = -1;
     std::string currentPlayerName;
+    std::string typedPlayerName;
+    std::unordered_map<std::string, int> bestScoresByName;
+    int highScoresScrollOffset = 0;
+    int highScoresSelectedIndex = 0;
+    bool ignoreNextTextInput = false;
     
     pthread_t kirbyThread;
     pthread_t enemyThread;

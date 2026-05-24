@@ -4,7 +4,10 @@
 #include "Projectile.hpp"
 #include <iostream>
 #include <fstream>
+#include <sstream>
+#include <vector>
 #include <algorithm>
+#include <cctype>
 
 Game::Game() : running(true), lastMusicLevel(-1), masterVolume(50.0f), pausedModeBeforePause(GameMode::MENU) {
     window.create(sf::VideoMode(GameConfig::WINDOW_WIDTH, GameConfig::WINDOW_HEIGHT), "Kirby Clásico - Motor Pthreads");
@@ -47,26 +50,37 @@ void Game::cleanEntities() {
 void Game::loadSettings() {
     std::ifstream file("settings.cfg");
     if (file.is_open()) {
-        // settings.cfg format: <volume> <mutedFlag> <bestScore> <bestKevin> <bestPablo> <bestFabiola>
-        // If fields are absent, defaults are used for backwards compatibility.
-        float savedVolume;
-        int mutedFlag = 0;
-        int savedBestScore = 0;
-        int savedPlayerScore = 0;
-        if (file >> savedVolume) {
-            masterVolume = std::clamp(savedVolume, 0.0f, 100.0f);
-            if (file >> mutedFlag) {
-                isMuted = (mutedFlag != 0);
-            } else {
-                isMuted = false;
-            }
-            if (file >> savedBestScore) {
-                bestScore = std::max(0, savedBestScore);
-            }
-            for (int i = 0; i < 3; i++) {
-                if (file >> savedPlayerScore) {
-                    bestScoreByPlayer[i] = std::max(0, savedPlayerScore);
+        std::string line;
+        if (std::getline(file, line)) {
+            std::istringstream header(line);
+            float savedVolume;
+            int mutedFlag = 0;
+            int savedBestScore = 0;
+            if (header >> savedVolume) {
+                masterVolume = std::clamp(savedVolume, 0.0f, 100.0f);
+                if (header >> mutedFlag) {
+                    isMuted = (mutedFlag != 0);
+                } else {
+                    isMuted = false;
                 }
+                if (header >> savedBestScore) {
+                    bestScore = std::max(0, savedBestScore);
+                }
+            }
+        }
+        while (std::getline(file, line)) {
+            if (line.empty()) continue;
+            size_t tabPos = line.rfind('\t');
+            if (tabPos == std::string::npos) continue;
+            std::string name = line.substr(0, tabPos);
+            int score = 0;
+            try {
+                score = std::max(0, std::stoi(line.substr(tabPos + 1)));
+            } catch (...) {
+                score = 0;
+            }
+            if (!name.empty()) {
+                bestScoresByName[name] = score;
             }
         }
     }
@@ -75,10 +89,9 @@ void Game::loadSettings() {
 void Game::saveSettings() {
     std::ofstream file("settings.cfg");
     if (file.is_open()) {
-        // Persist volume, muted flag (0/1), global best score, and best player scores.
-        file << masterVolume << " " << (isMuted ? 1 : 0) << " " << bestScore;
-        for (int i = 0; i < 3; i++) {
-            file << " " << bestScoreByPlayer[i];
+        file << masterVolume << " " << (isMuted ? 1 : 0) << " " << bestScore << "\n";
+        for (const auto& entry : bestScoresByName) {
+            file << entry.first << "\t" << entry.second << "\n";
         }
     }
 }
@@ -149,29 +162,67 @@ void Game::processEvents() {
             if (mode == GameMode::MENU) {
                 if (e.key.code == sf::Keyboard::Num1) startPlayerSelection();
                 if (e.key.code == sf::Keyboard::Num2) startGame(GameMode::MODE_2_CPU);
-                if (e.key.code == sf::Keyboard::Num3) sharedState.setMode(GameMode::HIGH_SCORES);
+                if (e.key.code == sf::Keyboard::Num3) {
+                    highScoresScrollOffset = 0;
+                    highScoresSelectedIndex = 0;
+                    sharedState.setMode(GameMode::HIGH_SCORES);
+                }
                 if (e.key.code == sf::Keyboard::I) sharedState.setMode(GameMode::INSTRUCTIONS);
                 if (e.key.code == sf::Keyboard::Left) adjustVolume(-5);
                 if (e.key.code == sf::Keyboard::Right) adjustVolume(5);
                 if (e.key.code == sf::Keyboard::Escape) window.close();
             } else if (mode == GameMode::PLAYER_SELECT) {
-                if (e.key.code == sf::Keyboard::Num1) {
-                    currentPlayerIndex = 0;
-                    currentPlayerName = "Kevin";
-                    startGame(GameMode::MODE_1_PLAYER);
+                if (e.key.code == sf::Keyboard::Enter || e.key.code == sf::Keyboard::Return) {
+                    if (!typedPlayerName.empty()) {
+                        std::string name = typedPlayerName;
+                        while (!name.empty() && std::isspace(static_cast<unsigned char>(name.back()))) name.pop_back();
+                        while (!name.empty() && std::isspace(static_cast<unsigned char>(name.front()))) name.erase(name.begin());
+                        if (!name.empty()) {
+                            currentPlayerName = name;
+                            startGame(GameMode::MODE_1_PLAYER);
+                        }
+                    }
                 }
-                if (e.key.code == sf::Keyboard::Num2) {
-                    currentPlayerIndex = 1;
-                    currentPlayerName = "Pablo";
-                    startGame(GameMode::MODE_1_PLAYER);
+                if (e.key.code == sf::Keyboard::BackSpace) {
+                    if (!typedPlayerName.empty()) typedPlayerName.pop_back();
                 }
-                if (e.key.code == sf::Keyboard::Num3) {
-                    currentPlayerIndex = 2;
-                    currentPlayerName = "Fabiola";
-                    startGame(GameMode::MODE_1_PLAYER);
+                if (e.key.code == sf::Keyboard::Escape) {
+                    typedPlayerName.clear();
+                    sharedState.setMode(GameMode::MENU);
                 }
-                if (e.key.code == sf::Keyboard::Escape) sharedState.setMode(GameMode::MENU);
             } else if (mode == GameMode::HIGH_SCORES) {
+                if (e.key.code == sf::Keyboard::Up) {
+                    if (highScoresSelectedIndex > 0) {
+                        highScoresSelectedIndex--;
+                        if (highScoresSelectedIndex < highScoresScrollOffset) {
+                            highScoresScrollOffset = highScoresSelectedIndex;
+                        }
+                    }
+                }
+                if (e.key.code == sf::Keyboard::Down) {
+                    if (highScoresSelectedIndex + 1 < (int)bestScoresByName.size()) {
+                        highScoresSelectedIndex++;
+                        if (highScoresSelectedIndex >= highScoresScrollOffset + 5) {
+                            highScoresScrollOffset = highScoresSelectedIndex - 4;
+                        }
+                    }
+                }
+                if (e.key.code == sf::Keyboard::Delete || e.key.code == sf::Keyboard::D) {
+                    if (!bestScoresByName.empty() && highScoresSelectedIndex < (int)bestScoresByName.size()) {
+                        std::vector<std::pair<std::string, int>> scoreList;
+                        for (const auto& entry : bestScoresByName) scoreList.emplace_back(entry.first, entry.second);
+                        std::sort(scoreList.begin(), scoreList.end(), [](const auto& a, const auto& b){
+                            return a.second > b.second || (a.second == b.second && a.first < b.first);
+                        });
+                        const std::string& toRemove = scoreList[highScoresSelectedIndex].first;
+                        bestScoresByName.erase(toRemove);
+                        if (highScoresSelectedIndex >= (int)bestScoresByName.size()) {
+                            highScoresSelectedIndex = std::max(0, (int)bestScoresByName.size() - 1);
+                        }
+                        highScoresScrollOffset = std::min(highScoresScrollOffset, std::max(0, (int)bestScoresByName.size() - 5));
+                        saveSettings();
+                    }
+                }
                 if (e.key.code == sf::Keyboard::Escape) sharedState.setMode(GameMode::MENU);
             } else if (mode == GameMode::INSTRUCTIONS) {
                 if (e.key.code == sf::Keyboard::Escape) sharedState.setMode(GameMode::MENU);
@@ -208,6 +259,30 @@ void Game::processEvents() {
                     }
                     if (e.key.code == sf::Keyboard::Down) {
                         sharedState.kirby->swallow(&sharedState);
+                    }
+                }
+            }
+        }
+        if (e.type == sf::Event::TextEntered) {
+            if (sharedState.getMode() == GameMode::PLAYER_SELECT) {
+                if (ignoreNextTextInput) {
+                    ignoreNextTextInput = false;
+                } else if (e.text.unicode >= 32 && e.text.unicode != 127 && typedPlayerName.size() < 64) {
+                    sf::Uint32 code = e.text.unicode;
+                    if (code < 0x80) {
+                        typedPlayerName.push_back(static_cast<char>(code));
+                    } else if (code < 0x800) {
+                        typedPlayerName.push_back(static_cast<char>(0xC0 | (code >> 6)));
+                        typedPlayerName.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+                    } else if (code < 0x10000) {
+                        typedPlayerName.push_back(static_cast<char>(0xE0 | (code >> 12)));
+                        typedPlayerName.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
+                        typedPlayerName.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+                    } else {
+                        typedPlayerName.push_back(static_cast<char>(0xF0 | (code >> 18)));
+                        typedPlayerName.push_back(static_cast<char>(0x80 | ((code >> 12) & 0x3F)));
+                        typedPlayerName.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
+                        typedPlayerName.push_back(static_cast<char>(0x80 | (code & 0x3F)));
                     }
                 }
             }
@@ -296,8 +371,8 @@ void Game::resetGame() {
     sharedState.setMode(GameMode::MENU);
     sharedState.score = 0;
     sharedState.currentLevel = 0;
-    currentPlayerIndex = -1;
     currentPlayerName.clear();
+    typedPlayerName.clear();
     cleanEntities();
     audioManager.stopAllMusic();
     lastMusicLevel = -1;
@@ -306,8 +381,9 @@ void Game::resetGame() {
 }
 
 void Game::startPlayerSelection() {
-    currentPlayerIndex = -1;
     currentPlayerName.clear();
+    typedPlayerName.clear();
+    ignoreNextTextInput = true;
     sharedState.setMode(GameMode::PLAYER_SELECT);
 }
 
@@ -498,9 +574,10 @@ void Game::update() {
         bestScore = sharedState.score;
         saveNeeded = true;
     }
-    if (sharedState.getMode() == GameMode::MODE_1_PLAYER && currentPlayerIndex >= 0) {
-        if (sharedState.score > bestScoreByPlayer[currentPlayerIndex]) {
-            bestScoreByPlayer[currentPlayerIndex] = sharedState.score;
+    if (sharedState.getMode() == GameMode::MODE_1_PLAYER && !currentPlayerName.empty()) {
+        int& playerBest = bestScoresByName[currentPlayerName];
+        if (sharedState.score > playerBest) {
+            playerBest = sharedState.score;
             saveNeeded = true;
         }
     }
@@ -651,13 +728,13 @@ void Game::render() {
         window.draw(selectPanel);
 
         sf::Text t; t.setFont(font);
-        t.setString("SELECCIONA LA PERSONA"); t.setCharacterSize(35); t.setFillColor(sf::Color(255, 182, 193));
+        t.setString("QUIEN JUGARA?"); t.setCharacterSize(44); t.setFillColor(sf::Color(255, 182, 193));
         t.setStyle(sf::Text::Bold);
-        t.setPosition(160, 150); window.draw(t);
+        t.setPosition(220, 150); window.draw(t);
 
         t.setCharacterSize(24); t.setStyle(sf::Text::Regular); t.setFillColor(sf::Color(230,230,255));
-        t.setString("1 - Kevin\n\n2 - Pablo\n\n3 - Fabiola\n\nESC - Volver al menu");
-        t.setPosition(240, 220); window.draw(t);
+        t.setString("Escribe tu nombre y presiona ENTER:\n\n" + typedPlayerName + "_");
+        t.setPosition(180, 240); window.draw(t);
         t.setCharacterSize(20);
     } else if (mode == GameMode::HIGH_SCORES) {
         highScoresBgSprite.setPosition(0,0);
@@ -672,15 +749,61 @@ void Game::render() {
         sf::Text t; t.setFont(font);
         t.setString("PUNTAJES MAS ALTOS"); t.setCharacterSize(40); t.setFillColor(sf::Color(255, 215, 0));
         t.setStyle(sf::Text::Bold);
-        t.setPosition(180, 130); window.draw(t);
+        t.setPosition(170, 130); window.draw(t);
 
-        t.setCharacterSize(24); t.setStyle(sf::Text::Regular); t.setFillColor(sf::Color(240,240,255));
-        t.setString("Kevin: " + std::to_string(bestScoreByPlayer[0]) + "\n\nPablo: " + std::to_string(bestScoreByPlayer[1]) + "\n\nFabiola: " + std::to_string(bestScoreByPlayer[2]));
-        t.setPosition(260, 220); window.draw(t);
+        std::vector<std::pair<std::string,int>> scoreList;
+        for (const auto& entry : bestScoresByName) {
+            scoreList.emplace_back(entry.first, entry.second);
+        }
+        std::sort(scoreList.begin(), scoreList.end(), [](const auto& a, const auto& b){
+            return a.second > b.second || (a.second == b.second && a.first < b.first);
+        });
 
+        if (highScoresSelectedIndex >= (int)scoreList.size()) {
+            highScoresSelectedIndex = std::max(0, (int)scoreList.size() - 1);
+        }
+        highScoresScrollOffset = std::clamp(highScoresScrollOffset, 0, std::max(0, (int)scoreList.size() - 5));
+
+        float lineHeight = 34.0f;
+        float startY = 220.0f;
+        if (scoreList.empty()) {
+            t.setCharacterSize(24); t.setStyle(sf::Text::Regular); t.setFillColor(sf::Color(240,240,255));
+            t.setString("No hay puntajes guardados.");
+            t.setPosition(180, startY);
+            window.draw(t);
+        } else {
+            int visibleCount = std::min(5, (int)scoreList.size());
+            for (int idx = 0; idx < visibleCount; idx++) {
+                int entryIndex = highScoresScrollOffset + idx;
+                if (entryIndex >= (int)scoreList.size()) break;
+                const auto& entry = scoreList[entryIndex];
+                float y = startY + idx * lineHeight;
+                if (entryIndex == highScoresSelectedIndex) {
+                    sf::RectangleShape highlight(sf::Vector2f(480.0f, lineHeight - 8.0f));
+                    highlight.setPosition(170.0f, y - 6.0f);
+                    highlight.setFillColor(sf::Color(255, 255, 255, 40));
+                    window.draw(highlight);
+                }
+                t.setCharacterSize(24);
+                t.setStyle(sf::Text::Regular);
+                t.setFillColor(entryIndex == highScoresSelectedIndex ? sf::Color(255, 240, 180) : sf::Color(240,240,255));
+                t.setString(std::to_string(entryIndex + 1) + ". " + entry.first + ": " + std::to_string(entry.second));
+                t.setPosition(180, y);
+                window.draw(t);
+            }
+            if ((int)scoreList.size() > 5) {
+                t.setCharacterSize(18);
+                t.setFillColor(sf::Color(200,200,255));
+                t.setString("Usa ARRIBA/ABAJO para desplazarte, DEL para borrar.");
+                t.setPosition(155, startY + visibleCount * lineHeight + 5.0f);
+                window.draw(t);
+            }
+        }
         t.setCharacterSize(20);
+        t.setFillColor(sf::Color(220,220,255));
         t.setString("ESC - Volver al menu");
-        t.setPosition(300, 420); window.draw(t);
+        t.setPosition(300, 420);
+        window.draw(t);
     } else if (mode == GameMode::PAUSED) {
         // Renderizar el juego de fondo
         levelBgSprite.setPosition(-((int)(camX * 0.2f) % (int)levelBgSprite.getGlobalBounds().width), 0);

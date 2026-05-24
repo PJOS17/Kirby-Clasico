@@ -177,57 +177,137 @@ void Kirby::updateCPU(SharedState* ss) {
         return;
     }
 
-    bool safeAhead = false;
-    bool spikeAhead = false;
-    bool wallAhead = false;
-    float checkX = x + (direction == 1 ? 60 : -30);
-    float checkY = y + 48;
-    
-    for (auto& p : ss->platforms) {
-        if (checkX >= p.x && checkX <= p.x + p.w) {
-            if (checkY <= p.y + 10 && checkY >= p.y - 150) {
-                if (p.type == TileType::SPIKE) spikeAhead = true;
-                else if (p.type == TileType::GROUND || p.type == TileType::PLATFORM || p.type == TileType::DOOR) safeAhead = true;
-            }
-            if (checkY > p.y + 10 && checkY < p.y + p.h) {
-                wallAhead = true;
-            }
-        }
-    }
-
-    if (wallAhead || (vx == 0 && !onGround && state != KirbyState::HURT)) {
-        direction *= -1;
-    } else if (spikeAhead || !safeAhead) {
-        if (onGround) jump(ss);
-        else if (floatsLeft > 0) floatUp(ss);
-        else direction *= -1;
-    }
-    
-    if (vx == 0 && onGround && state != KirbyState::HURT) direction *= -1;
-    if (rand() % 400 == 0) direction *= -1;
-
-    vx = direction * GameConfig::MOVE_SPEED;
-    if (state == KirbyState::IDLE) state = KirbyState::WALKING;
-
-    // If an enemy is in absorb range, attempt to absorb (improves CPU behavior)
-    sf::FloatRect cpuArea = getAbsorbBounds();
-    for (size_t ei = 0; ei < ss->enemies.size(); ++ei) {
-        Enemy* e = ss->enemies[ei];
-        if (e && !e->isDead() && cpuArea.intersects(e->getBounds())) {
-            startAbsorb(ss);
+    bool bossAlive = false;
+    float targetX = x + 1000.0f;
+    for (auto* e : ss->enemies) {
+        if (e && e->isBoss() && !e->isDead()) {
+            bossAlive = true;
+            targetX = e->getBounds().left;
             break;
         }
     }
+    if (!bossAlive) {
+        for (auto& p : ss->platforms) {
+            if (p.type == TileType::DOOR) {
+                targetX = p.x;
+                break;
+            }
+        }
+    }
 
-    if (rand() % 60 == 0) {
+    auto isSafeGround = [&](float px) {
+        for (auto& p : ss->platforms) {
+            if ((p.type == TileType::GROUND || p.type == TileType::PLATFORM || p.type == TileType::DOOR) && px >= p.x && px <= p.x + p.w) {
+                if (y + 48 <= p.y + 12 && y + 48 >= p.y - 160) return true;
+            }
+        }
+        return false;
+    };
+
+    auto isSpikeAt = [&](float px) {
+        for (auto& p : ss->platforms) {
+            if (p.type == TileType::SPIKE && px >= p.x && px <= p.x + p.w) {
+                if (y + 48 <= p.y + 12 && y + 48 >= p.y - 160) return true;
+            }
+        }
+        return false;
+    };
+
+    auto isWallAhead = [&]() {
+        float checkX = x + (direction == 1 ? 48 : -16);
+        for (auto& p : ss->platforms) {
+            if ((p.type == TileType::GROUND || p.type == TileType::PLATFORM || p.type == TileType::DOOR) && checkX >= p.x && checkX <= p.x + p.w) {
+                if (y + 48 > p.y + 10 && y + 48 < p.y + p.h + 12) return true;
+            }
+        }
+        return false;
+    };
+
+    bool gapAhead = !isSafeGround(x + direction * 100.0f);
+    bool spikeAhead = isSpikeAt(x + direction * 64.0f);
+    bool wallAhead = isWallAhead();
+    float distToGoal = targetX - x;
+
+    if (fabs(distToGoal) > 20.0f && !wallAhead) {
+        direction = distToGoal > 0 ? 1 : -1;
+    }
+
+    if (wallAhead) {
+        if (onGround) jump(ss);
+        else direction *= -1;
+    } else if (spikeAhead || gapAhead) {
+        if (onGround) {
+            jump(ss);
+        } else if (floatsLeft > 0) {
+            floatUp(ss);
+        } else {
+            direction *= -1;
+        }
+    }
+
+    // Prefer closing on the goal unless a hazard forces a turn.
+    if (vx == 0 && onGround && state != KirbyState::HURT) {
+        if (!gapAhead && !spikeAhead) direction = distToGoal > 0 ? 1 : -1;
+    }
+
+    // Keep moving toward the goal once we choose a direction.
+    vx = direction * GameConfig::MOVE_SPEED;
+    if (state == KirbyState::IDLE) state = KirbyState::WALKING;
+
+    // Try to absorb an enemy if it is directly ahead and in range.
+    sf::FloatRect cpuArea = getAbsorbBounds();
+    for (auto* e : ss->enemies) {
+        if (e && !e->isDead() && cpuArea.intersects(e->getBounds())) {
+            if (ability == Ability::NONE && state != KirbyState::ABSORBING && state != KirbyState::HAS_ENEMY) {
+                startAbsorb(ss);
+                break;
+            }
+        }
+    }
+
+    // If there is a nearby enemy and we have an ability, use it more aggressively.
+    Enemy* nearestEnemy = nullptr;
+    float nearestDist = 9999.0f;
+    for (auto* e : ss->enemies) {
+        if (!e || e->isDead()) continue;
+        float ex = e->getBounds().left + e->getBounds().width * 0.5f;
+        float dx = ex - x;
+        float absdx = fabs(dx);
+        if (absdx < nearestDist) {
+            nearestDist = absdx;
+            nearestEnemy = e;
+        }
+    }
+
+    if (nearestEnemy && nearestDist < 180.0f) {
+        float ex = nearestEnemy->getBounds().left + nearestEnemy->getBounds().width * 0.5f;
+        if (fabs(ex - x) > 40.0f) direction = (ex > x ? 1 : -1);
+        if (ability != Ability::NONE && attackCooldown <= 0) {
+            spitOrUseAbility(ss);
+        } else if (state == KirbyState::HAS_ENEMY && attackCooldown <= 0) {
+            spitOrUseAbility(ss);
+        } else if (ability == Ability::NONE && cpuArea.intersects(nearestEnemy->getBounds())) {
+            startAbsorb(ss);
+        }
+    }
+
+    // Use available attack if door is near and we have a weapon to clear obstacles.
+    if (!bossAlive && fabs(distToGoal) < 240.0f && ability != Ability::NONE && attackCooldown <= 0) {
+        spitOrUseAbility(ss);
+    }
+
+    // Make the CPU use its current ability more often in combat.
+    if (rand() % 40 == 0) {
         if (state == KirbyState::HAS_ENEMY) {
             if (rand() % 2 == 0) swallow(ss);
             else spitOrUseAbility(ss);
+        } else if (ability != Ability::NONE && attackCooldown <= 0) {
+            spitOrUseAbility(ss);
+        } else if (ability == Ability::NONE && state != KirbyState::ABSORBING) {
+            startAbsorb(ss);
         }
-        else if (ability != Ability::NONE) spitOrUseAbility(ss);
-        else startAbsorb(ss);
     }
-    
+
     update(ss);
 }
 
